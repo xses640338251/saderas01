@@ -1,8 +1,8 @@
 =======================================================
 RDP INFO - DucThang x TrueHieu Edition
 =======================================================
-Địa chỉ kết nối: bore.pub:31765
-Tài khoản: admin
-Mật khẩu: WindowsRDP2026@
-Thời gian tạo: 06:47:35 06/09/2026
+Connection Address: bore.pub:60100
+Username: admin
+Password: WindowsRDP2026@
+Created At: 07:06:38 06/09/2026
 =======================================================
