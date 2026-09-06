@@ -1,8 +1,8 @@
 =======================================================
 RDP INFO - DucThang x TrueHieu Edition
 =======================================================
-Connection Address: bore.pub:20140
+Connection Address: bore.pub:32397
 Username: admin
 Password: WindowsRDP2026@
-Created At: 11:12:57 06/09/2026
+Created At: 12:17:32 06/09/2026
 =======================================================
